@@ -61,6 +61,14 @@
   }
 
   document.addEventListener("click", function (event) {
+    var txnRow = event.target.closest(".txn-row");
+    if (txnRow && !event.target.closest("a")) {
+      var txnId = txnRow.getAttribute("data-txn");
+      var detail = document.querySelector('.txn-detail[data-txn-detail="' + txnId + '"]');
+      if (detail) detail.hidden = !detail.hidden;
+      return;
+    }
+
     var target = event.target.closest("button");
     if (!target) return;
 
@@ -82,6 +90,22 @@
       request("/api/snapshot", {})
         .then(function (data) {
           toast("快照 " + data.rows + " 行 · as_of " + data.as_of);
+          window.setTimeout(function () {
+            window.location.reload();
+          }, 650);
+        })
+        .catch(function (err) {
+          toast(err.message, true);
+          busy(target, false);
+        });
+      return;
+    }
+
+    if (target.id === "btn-txn-rebuild") {
+      busy(target, true);
+      request("/api/txn/rebuild", {})
+        .then(function (data) {
+          toast("事务 " + data.rows + " 笔 · 发布金额 " + data.published_amount);
           window.setTimeout(function () {
             window.location.reload();
           }, 650);

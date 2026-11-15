@@ -38,6 +38,11 @@ def export_snapshot(ctx: Ctx = Depends(get_ctx)) -> Response:
     return _csv(ctx.store, service._batch(ctx.store, None)["batch_id"], "snapshot")
 
 
+@router.get("/api/export/txn.csv")
+def export_txn(ctx: Ctx = Depends(get_ctx)) -> Response:
+    return _csv(ctx.store, service._batch(ctx.store, None)["batch_id"], "txn")
+
+
 @router.get("/api/export/manifest.json")
 def export_manifest(ctx: Ctx = Depends(get_ctx)) -> Response:
     batch = service._batch(ctx.store, None)
@@ -50,6 +55,15 @@ def export_manifest(ctx: Ctx = Depends(get_ctx)) -> Response:
 def export_snapshot_json(ctx: Ctx = Depends(get_ctx)) -> Response:
     batch = service._batch(ctx.store, None)
     data, filename = service.render_snapshot_json(ctx.store, batch["batch_id"])
+    return Response(content=data, media_type=JSON_MEDIA,
+                    headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+@router.get("/api/export/txn.json")
+def export_txn_json(ctx: Ctx = Depends(get_ctx)) -> Response:
+    batch = service._batch(ctx.store, None)
+    data, filename = service.render_txn_json(
+        ctx.store, batch["batch_id"], ctx.settings)
     return Response(content=data, media_type=JSON_MEDIA,
                     headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 

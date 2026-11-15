@@ -95,6 +95,10 @@ REASONS = {
     "W_TIME_NO_OFFSET": _r(
         "W_TIME_NO_OFFSET", WARN, "contract",
         "event_time 没有时区偏移，按 +08:00 解释", "导出端补上偏移"),
+    "E_BAD_TXN": _r(
+        "E_BAD_TXN", ERROR, "contract",
+        "事务信封不合法（txn_id/part_no/part_total 缺失或分片号越界）",
+        "补全事务三字段，分片号需满足 1 ≤ part_no ≤ part_total"),
     # ---- M3 去重与冲突 ----
     "D_EXACT_DUP": _r(
         "D_EXACT_DUP", WARN, "dedup",
@@ -139,6 +143,31 @@ REASONS = {
     "X_EMPTY_SELECTION": _r(
         "X_EMPTY_SELECTION", WARN, "export",
         "导出选择为空", "先跑一次采信再导出"),
+    # ---- M8 事务装配 ----
+    "T_INCOMPLETE": _r(
+        "T_INCOMPLETE", WARN, "txn",
+        "业务事务分片未到齐，整笔挂起不进对外结果",
+        "按缺失分片号回源补数，补齐后同一批次重跑即转完整"),
+    "T_PART_CONFLICT": _r(
+        "T_PART_CONFLICT", ERROR, "txn",
+        "同一分片号出现两种内容，整笔事务不发布",
+        "两条都不采信，回源确认该分片的正确版本后重放"),
+    "T_DUP_PART": _r(
+        "T_DUP_PART", WARN, "txn",
+        "同一分片号重复到达且内容一致，保留首条",
+        "上游重投，可忽略；不会重复计入金额"),
+    "T_LATE_SHARD": _r(
+        "T_LATE_SHARD", WARN, "txn",
+        "分片晚于该事务自己的门限到达，只挂起本事务不拖全局水位",
+        "分组水位线保证迟到分片不阻塞其他事务发布"),
+    "T_PUBLISHED": _r(
+        "T_PUBLISHED", INFO, "txn",
+        "分片齐全且无冲突，事务整体发布",
+        "只有完整事务进对外结果与金额合计"),
+    "T_AGED": _r(
+        "T_AGED", WARN, "txn",
+        "事务超过自身门限仍未补齐，标记老化但保留可读回",
+        "补数到达后同批次重跑，旧版结果在落库成功前不会被替换"),
 }
 
 

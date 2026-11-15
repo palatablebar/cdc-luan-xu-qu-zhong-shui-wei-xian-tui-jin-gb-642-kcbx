@@ -12,7 +12,14 @@
 | `op` | enum | 是 | `upsert` / `delete`；`delete` 写墓碑 |
 | `event_time` | string | 是 | 源库事务时间。`Z`、`+08:00` 与无偏移三种写法都接受，入库统一 UTC |
 | `schema` | enum | 否 | `v1` / `v2`，缺省按 `v2`；只影响列名映射 |
+| `txn_id` | string | 否 | 业务事务号。非空即进入 M8 事务装配；三字段全缺按普通事件处理 |
+| `part_no` | int | 条件 | 事务分片号，从 1 起；带 `txn_id` 时必填 |
+| `part_total` | int | 条件 | 该事务的分片总数；带 `txn_id` 时必填，且需 `part_no ≤ part_total` |
 | `payload` | object | 是 | 业务字段，见第 2 节 |
+
+事务信封约束：`txn_id` 非空而 `part_no` / `part_total` 缺失、非正整数或越界
+（`part_no > part_total`），判 `E_BAD_TXN` 隔离，不允许拼成「伪完整」事务；
+同一事务内 `part_total` 声明不一致按 `T_PART_CONFLICT` 处理，整笔不发布。
 
 ## 2 payload 字段
 
@@ -91,3 +98,50 @@
 `watermark_utc`、`max_event_time_utc`、`stages[]`、`counters`、`reconcile`。
 
 同一 `input_digest` 重跑命中同一 `batch_key`，返回原批次、不新增行。
+
+## 10 事务装配（M8，关键定义）
+
+一笔业务事务（下单 + 支付 + 退款）在源库是一次提交，导出时被拆成多条分片事件，
+可能丢片、重投、乱序。M8 把带同一 `txn_id` 的事件折回一个整体，再决定是否对外可见。
+
+### 10.1 三种事务状态
+
+| 状态 | 判定 | 对外结果 | 原因码 |
+|---|---|---|---|
+| `complete` 完整 | `1..part_total` 每个分片都到齐，且无同片异内容、无 `part_total` 矛盾 | **发布**，金额进对外合计 | `T_PUBLISHED` |
+| `incomplete` 未完整 | 至少一个分片号缺失 | 不发布，整笔挂起可回读 | `T_INCOMPLETE` |
+| `conflict` 冲突 | 同一 `part_no` 出现两种规范化签名，或 `part_total` 声明不一致 | 整笔不发布 | `T_PART_CONFLICT` |
+
+同片同签名的重复到达是重投（`T_DUP_PART` 语义，M3 已标 `D_EXACT_DUP`），保留首条、
+不重复计金额；判定全部由集合运算得出，与分片到达顺序无关。
+
+### 10.2 分组水位线（不让一个慢分片拖停整库）
+
+- 全局水位线仍是 `max(全部已应用 event_time) − 迟到窗口`，**不被任何未完整事务拖住**；
+- 每个事务另有自己的分组门限 `gate(txn) = max(event_time ∈ 该事务) − 迟到窗口`；
+- 分片 `event_time < gate(txn)` 只在该事务上记 `late_parts`（`T_LATE_SHARD`），
+  分片齐全时事务仍可发布；缺片事务超过自身门限记 `T_AGED`，但保留全部证据可回读。
+
+### 10.3 金额口径（两本账严格分离）
+
+- **对外发布金额** `txn_published_amount`：只累加 `complete` 事务的权威分片，
+  每个 `part_no` 只算一次，`delete` 分片不计；
+- **受影响金额** `txn_affected_amount`：`incomplete` 与 `conflict` 事务已到达分片的
+  金额，按分片去重，**不进对外合计**，只用于回读与对账；
+- 金额全程 `Decimal`、刻度 `0.01`，禁止 float；事务 JSON 里是两位小数字符串。
+
+### 10.4 落库、失败与重跑
+
+- 事务结果写 `txn_results` 表，与事件/快照在同一个 SQLite 事务里「先删后插」，
+  任一步失败整体回滚，**旧版结果保留**；
+- 同一输入重跑命中 `batch_key` 走幂等重放，不新增事务行、不改合计；
+- `POST /api/txn/rebuild` 按同一输入重算，行数与金额不变；
+- 回读入口：`GET /api/txn`（全量）、`GET /api/txn/{txn_id}`（分片证据）、
+  导出 `GET /api/export/txn.csv` 与 `/api/export/txn.json`（published/held 分组）。
+
+### 10.5 事务对账
+
+- 事务账：事务事件数 = 已发布事务事件 + 挂起/冲突事务事件；
+- 状态账：事务总数 = 完整 + 未完整 + 冲突；
+- 金额账：对外发布金额与受影响金额分别披露、互不混算；
+- 三条账在 `/txn` 页面、`/api/txn` 与 manifest 的 `transactions` 段同时出现。

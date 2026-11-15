@@ -1,0 +1,17 @@
+# cdc-export v2 rows=13 charset=utf-8 来源=事务分片导出
+# T-8001：订单+支付+退款 3 片齐全（完整发布）；T-8002 缺第 3 片退款（挂起）；
+# T-8003 第 2 片同片异内容（冲突，整笔不发布）；T-8004 分片迟到但齐全（仍完整）；
+# T-8005 重复重投（同签名，保留首条，不重复计金额）。
+{"table":"orders","pk":"8001","version":1,"op":"upsert","event_time":"2026-11-15T10:00:00Z","schema":"v2","txn_id":"T-8001","part_no":1,"part_total":3,"payload":{"status":"已支付","amount":"100.00"}}
+{"table":"payments","pk":"8001","version":1,"op":"upsert","event_time":"2026-11-15T10:00:05Z","schema":"v2","txn_id":"T-8001","part_no":2,"part_total":3,"payload":{"status":"已支付","amount":"100.00"}}
+{"table":"refunds","pk":"8001","version":1,"op":"upsert","event_time":"2026-11-15T10:00:10Z","schema":"v2","txn_id":"T-8001","part_no":3,"part_total":3,"payload":{"status":"退款完成","amount":"20.00"}}
+{"table":"orders","pk":"8002","version":1,"op":"upsert","event_time":"2026-11-15T10:05:00Z","schema":"v2","txn_id":"T-8002","part_no":1,"part_total":3,"payload":{"status":"已支付","amount":"300.00"}}
+{"table":"payments","pk":"8002","version":1,"op":"upsert","event_time":"2026-11-15T10:05:05Z","schema":"v2","txn_id":"T-8002","part_no":2,"part_total":3,"payload":{"status":"已支付","amount":"300.00"}}
+{"table":"orders","pk":"8003","version":1,"op":"upsert","event_time":"2026-11-15T10:10:00Z","schema":"v2","txn_id":"T-8003","part_no":1,"part_total":2,"payload":{"status":"已支付","amount":"500.00"}}
+{"table":"payments","pk":"8003","version":1,"op":"upsert","event_time":"2026-11-15T10:10:05Z","schema":"v2","txn_id":"T-8003","part_no":2,"part_total":2,"payload":{"status":"已支付","amount":"500.00"}}
+{"table":"payments","pk":"8003","version":1,"op":"upsert","event_time":"2026-11-15T10:10:09Z","schema":"v2","txn_id":"T-8003","part_no":2,"part_total":2,"payload":{"status":"支付失败","amount":"500.00"}}
+{"table":"orders","pk":"8004","version":1,"op":"upsert","event_time":"2026-11-15T10:20:00Z","schema":"v2","txn_id":"T-8004","part_no":1,"part_total":2,"payload":{"status":"已支付","amount":"80.00"}}
+{"table":"payments","pk":"8004","version":1,"op":"upsert","event_time":"2026-11-15T10:35:00Z","schema":"v2","txn_id":"T-8004","part_no":2,"part_total":2,"payload":{"status":"已支付","amount":"80.00"}}
+{"table":"orders","pk":"8005","version":1,"op":"upsert","event_time":"2026-11-15T10:40:00Z","schema":"v2","txn_id":"T-8005","part_no":1,"part_total":2,"payload":{"status":"已支付","amount":"60.00"}}
+{"table":"payments","pk":"8005","version":1,"op":"upsert","event_time":"2026-11-15T10:40:05Z","schema":"v2","txn_id":"T-8005","part_no":2,"part_total":2,"payload":{"status":"已支付","amount":"60.00"}}
+{"table":"payments","pk":"8005","version":1,"op":"upsert","event_time":"2026-11-15T10:40:05Z","schema":"v2","txn_id":"T-8005","part_no":2,"part_total":2,"payload":{"status":"已支付","amount":"60.00"}}

@@ -242,13 +242,15 @@ table.grid tr.is-dim td {
 
 .state-applied,
 .state-ok,
-.state-active {
+.state-active,
+.state-complete {
   color: var(--ok);
 }
 
 .state-duplicate,
 .state-warn,
-.state-pending {
+.state-pending,
+.state-incomplete {
   color: var(--warn);
 }
 

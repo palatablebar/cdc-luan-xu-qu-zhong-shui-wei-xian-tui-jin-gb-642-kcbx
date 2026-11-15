@@ -40,6 +40,10 @@ class Norm:
     behind_seconds: int = 0
     row_class: str = ""
     reason_code: str | None = None
+    # M8 事务信封：txn_id 非空表示该事件属于一个多分片业务事务
+    txn_id: str = ""
+    part_no: int | None = None
+    part_total: int | None = None
 
     @property
     def time_iso(self) -> str | None:
@@ -64,6 +68,8 @@ class Norm:
             "field": self.bad_field or None, "raw_value": self.raw_value or None,
             "detail": self.detail or None, "late": self.late,
             "flags": self.codes, "raw_text": self.raw_text[:400],
+            "txn_id": self.txn_id or None, "part_no": self.part_no,
+            "part_total": self.part_total,
         }
 
 
@@ -73,6 +79,30 @@ def _payload_of(raw: dict) -> dict:
         return nested
     return {k: v for k, v in raw.items()
             if k not in contract.ENVELOPE and k != "payload"}
+
+
+def _parse_txn(raw: dict) -> tuple[str, int | None, int | None, list[str]]:
+    """解析事务信封。
+
+    - 三个字段都缺：普通事件，不进事务装配；
+    - txn_id 有值才按事务处理；part_no / part_total 必须是正整数且 part_no ≤ part_total；
+    - 任一不合法返回 E_BAD_TXN，由上层隔离该事件，避免把坏分片拼成「伪完整」事务。
+    """
+    txn_raw = raw.get("txn_id")
+    if txn_raw is None or str(txn_raw).strip() == "":
+        if raw.get("part_no") is None and raw.get("part_total") is None:
+            return "", None, None, []
+        return "", None, None, ["E_BAD_TXN"]
+    txn_id = str(txn_raw).strip()
+    part_no, c1 = coerce.to_int(raw.get("part_no"))
+    part_total, c2 = coerce.to_int(raw.get("part_total"))
+    if "E_TYPE_MISMATCH" in c1 or "E_TYPE_MISMATCH" in c2:
+        return "", None, None, ["E_BAD_TXN"]
+    if part_no is None or part_total is None or part_no <= 0 or part_total <= 0:
+        return "", None, None, ["E_BAD_TXN"]
+    if part_no > part_total:
+        return "", None, None, ["E_BAD_TXN"]
+    return txn_id, part_no, part_total, []
 
 
 def _fail(norm: Norm, code: str, *, field_name: str = "", raw_value: str = "",
@@ -124,6 +154,13 @@ def normalize_row(row: RawRow) -> Norm:
         # 时间解析返回的错误码已经进 errors，这里只收提示码，避免同一码出现两次
         if code.startswith(("W_", "S_")) and code not in norm.codes:
             norm.codes.append(code)
+
+    txn_id, part_no, part_total, txn_codes = _parse_txn(raw)
+    norm.txn_id, norm.part_no, norm.part_total = txn_id, part_no, part_total
+    for code in txn_codes:
+        _fail(norm, code, field_name="txn",
+              raw_value=str(raw.get("txn_id") or ""),
+              detail="事务信封不合法，按无事务事件处理")
 
     payload, p_codes, unknown, ambiguous = alias.normalize_payload(_payload_of(raw), schema)
     norm.payload = payload

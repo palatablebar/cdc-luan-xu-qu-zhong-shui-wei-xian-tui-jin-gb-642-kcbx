@@ -62,6 +62,48 @@ def snapshot_document(*, batch: dict, summary: dict, rows: list[dict],
     }
 
 
+def txn_document(*, batch: dict, summary: dict, results: list[dict],
+                 reconcile: list[dict]) -> dict:
+    """对外事务结果：complete 进 published；未完整/冲突保留在 held 里可回读。"""
+    published, held = [], []
+    for row in results:
+        item = {
+            "txn_id": row.get("txn_id"),
+            "status": row.get("status"),
+            "part_total": row.get("part_total"),
+            "part_count": row.get("part_count"),
+            "missing_parts": row.get("missing", []),
+            "conflict_parts": row.get("conflict_parts", []),
+            "late_parts": row.get("late_parts", []),
+            "tables": row.get("tables", []),
+            "event_count": row.get("event_count"),
+            "max_event_time_utc": row.get("max_event_time"),
+            "gate_utc": row.get("gate"),
+            "published_amount": f"{Decimal(str(row.get('published_amount') or 0)):.2f}",
+            "affected_amount": f"{Decimal(str(row.get('affected_amount') or 0)):.2f}",
+            "reason_code": row.get("reason_code"),
+            "evidence_row_refs": row.get("row_refs", []),
+        }
+        (published if row.get("status") == "complete" else held).append(item)
+    return {
+        "batch_id": batch.get("batch_id"),
+        "run_id": batch.get("run_id"),
+        "watermark_utc": batch.get("watermark_utc"),
+        "rule": "only complete transactions are published; held rows are readable",
+        "summary": {
+            "txn_total": summary.get("txn_total"),
+            "txn_complete": summary.get("txn_complete"),
+            "txn_incomplete": summary.get("txn_incomplete"),
+            "txn_conflict": summary.get("txn_conflict"),
+            "published_amount": f"{Decimal(str(summary.get('txn_published_amount') or 0)):.2f}",
+            "affected_amount": f"{Decimal(str(summary.get('txn_affected_amount') or 0)):.2f}",
+        },
+        "reconcile": reconcile,
+        "published": published,
+        "held": held,
+    }
+
+
 def _row(row: dict) -> dict:
     out = {
         "table": row.get("table") or row.get("table_name"),

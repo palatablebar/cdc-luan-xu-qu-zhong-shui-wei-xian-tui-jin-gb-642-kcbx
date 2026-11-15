@@ -29,8 +29,33 @@ def build(store, batch_id: str) -> dict:
         or batch.get("max_event_time"),
         "stages": doc.get("stages", _stages(store, batch_id)),
         "counters": doc.get("counters", store.load_totals(batch_id)),
+        "transactions": _txn_section(store, batch_id),
         "reconcile": doc.get("reconcile", []),
         "replayable": "同一 input_digest 重跑命中 batch_key，不新增行",
+    }
+
+
+def _txn_section(store, batch_id: str) -> dict:
+    """事务口径摘要：对外只发布完整事务，挂起/冲突与受影响金额单独列。"""
+    rows = store.load_txn_results(batch_id)
+    if not rows:
+        return {"rule": "no transactional events in this batch",
+                "published": [], "held": []}
+    published, held = [], []
+    for row in rows:
+        item = {"txn_id": row["txn_id"], "status": row["status"],
+                "parts": f"{row['part_count']}/{row['part_total']}",
+                "missing_parts": row["missing"],
+                "conflict_parts": row["conflict_parts"],
+                "published_amount": str(row["published_amount"]),
+                "affected_amount": str(row["affected_amount"]),
+                "evidence_row_refs": row["row_refs"]}
+        (published if row["status"] == "complete" else held).append(item)
+    return {
+        "rule": "only complete transactions are published; "
+                "held/conflicted stay readable with affected amounts",
+        "published_count": len(published), "held_count": len(held),
+        "published": published, "held": held,
     }
 
 

@@ -19,9 +19,10 @@ from .modules.m4_watermark import handler as m4_handler
 from .modules.m5_snapshot import handler as m5_handler
 from .modules.m6_batches import handler as m6_handler
 from .modules.m7_export import handler as m7_handler
+from .modules.m8_txn import handler as m8_handler
 
 MODULES = (m1_handler, m2_handler, m3_handler, m4_handler, m5_handler,
-           m6_handler, m7_handler)
+           m6_handler, m7_handler, m8_handler)
 
 
 def create_app(settings: config.Settings | None = None,
@@ -38,7 +39,7 @@ def create_app(settings: config.Settings | None = None,
 
     app = FastAPI(
         title="cdcwater CDC 乱序去重与水位线推进",
-        description="采信 → 契约 → 去重冲突 → 水位迟到 → 快照 → 导出",
+        description="采信 → 契约 → 去重冲突 → 水位迟到 → 事务装配 → 快照 → 导出",
         version=settings.rule_version,
         lifespan=lifespan,
     )

@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="panel-head">
+    <h1>事务装配</h1>
+    <p class="panel-sub">只发布来源依据完整的业务事务 · {{ summary.txn_total | num }} 笔</p>
+  </div>
+  <div class="panel-body">
+    <div class="actions">
+      <button class="btn btn-primary" id="btn-txn-rebuild" type="button">重新装配</button>
+      <a class="btn" href="/api/export/txn.csv">导出事务 CSV</a>
+      <a class="btn" href="/api/export/txn.json">对外结果 JSON</a>
+      <span class="hint" id="txn-hint">同一输入重算，行数与金额不变</span>
+    </div>
+  </div>
+</section>
+
+<div class="split">
+  <aside class="rail" aria-label="事务计数">
+    <dl>
+      <div class="row"><dt class="key">事务总数</dt><dd class="value">{{ summary.txn_total | num }}</dd></div>
+      <div class="row"><dt class="key">完整（发布）</dt><dd class="value is-ok">{{ summary.txn_complete | num }}</dd></div>
+      <div class="row"><dt class="key">未完整（挂起）</dt><dd class="value is-warn">{{ summary.txn_incomplete | num }}</dd></div>
+      <div class="row"><dt class="key">冲突（不发布）</dt><dd class="value is-bad">{{ summary.txn_conflict | num }}</dd></div>
+      <div class="row"><dt class="key">发布事件</dt><dd class="value">{{ summary.txn_published_events | num }}</dd></div>
+      <div class="row"><dt class="key">挂起事件</dt><dd class="value is-warn">{{ summary.txn_held_events | num }}</dd></div>
+      <div class="row"><dt class="key">对外发布金额</dt><dd class="value">{{ summary.txn_published_amount | dec }}</dd></div>
+      <div class="row"><dt class="key">受影响金额</dt><dd class="value is-warn">{{ summary.txn_affected_amount | dec }}</dd></div>
+    </dl>
+  </aside>
+
+  <div class="stack">
+    <section class="panel">
+      <div class="panel-head">
+        <h2>分组水位与对账</h2>
+        <p class="panel-sub">慢分片只挂自己，不拖全局</p>
+      </div>
+      <div class="panel-body tight">
+        <div class="table-wrap">
+          <table class="grid">
+            <thead><tr><th>账</th><th>左</th><th class="num">值</th><th>右</th><th class="num">值</th><th>结论</th></tr></thead>
+            <tbody>
+              {% for row in reconcile %}
+              <tr>
+                <td>{{ row.name }}</td>
+                <td>{{ row.left }}</td>
+                <td class="num">{{ (row.left_value | num) if row.kind == "count" else (row.left_value | dec) }}</td>
+                <td>{{ row.right }}</td>
+                <td class="num">{{ (row.right_value | num) if row.kind == "count" else (row.right_value | dec) }}</td>
+                <td><span class="balance {% if not row.ok %}is-bad{% endif %}">{{ "平" if row.ok else "不平" }}</span></td>
+              </tr>
+              {% endfor %}
+              {% for row in gate_rows %}
+              <tr class="is-dim"><td>{{ row.side }}</td><td colspan="4" class="mono">{{ row.expr }}</td><td>{{ row.note }}</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>事务结果</h2>
+        <p class="panel-sub">{{ results | length }} 笔 · 完整可展开看分片证据</p>
+      </div>
+      <div class="panel-body tight">
+        <div class="table-wrap">
+          <table class="grid" data-sortable>
+            <thead><tr>
+              <th>事务号</th><th>状态</th><th class="num">分片</th>
+              <th>缺失</th><th>冲突分片</th><th>迟到分片</th><th>涉及表</th>
+              <th class="num">事件</th><th class="num">发布金额</th>
+              <th class="num">受影响金额</th><th>组内最大时间</th><th>门限</th>
+              <th>原因码</th>
+            </tr></thead>
+            <tbody>
+              {% for row in results %}
+              <tr class="txn-row" data-txn="{{ row.txn_id }}" data-status="{{ row.status }}">
+                <td class="mono"><a href="/api/txn/{{ row.txn_id }}" target="_blank">{{ row.txn_id }}</a></td>
+                <td><span class="state state-{{ row.status }}">{{ row.status_label }}</span></td>
+                <td class="num">{{ row.part_count }}/{{ row.part_total }}</td>
+                <td class="is-warn">{{ row.missing | join(",") if row.missing else '—' }}</td>
+                <td class="is-bad">{{ row.conflict_parts | join(",") if row.conflict_parts else '—' }}</td>
+                <td>{{ row.late_parts | join(",") if row.late_parts else '—' }}</td>
+                <td>{{ row.tables | join(",") }}</td>
+                <td class="num">{{ row.event_count }}</td>
+                <td class="num">{{ row.published_amount | dec }}</td>
+                <td class="num">{{ row.affected_amount | dec }}</td>
+                <td class="mono nowrap">{{ row.max_event_time | localdt }}</td>
+                <td class="mono nowrap">{{ row.gate | localdt }}</td>
+                <td><code>{{ row.reason_code }}</code></td>
+              </tr>
+              <tr class="txn-detail" data-txn-detail="{{ row.txn_id }}" hidden>
+                <td colspan="13" class="tight">
+                  <p class="hint">{{ row.detail }} · 证据：{{ row.row_refs | join(" | ") }}</p>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        {% if not results %}<p class="empty">还没有事务数据（事件带 txn_id 后才会出现在这里）。</p>{% endif %}
+      </div>
+    </section>
+  </div>
+</div>
+{% endblock %}

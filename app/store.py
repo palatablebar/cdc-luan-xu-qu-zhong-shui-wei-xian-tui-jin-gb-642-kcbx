@@ -45,9 +45,27 @@ CREATE TABLE IF NOT EXISTS events (
     payload_json TEXT NOT NULL DEFAULT '{}', amount TEXT, qty INTEGER,
     row_class TEXT NOT NULL, reason_code TEXT, field TEXT, raw_value TEXT,
     detail TEXT, late INTEGER NOT NULL DEFAULT 0, flags_json TEXT NOT NULL DEFAULT '[]',
-    raw_text TEXT NOT NULL DEFAULT ''
+    raw_text TEXT NOT NULL DEFAULT '',
+    txn_id TEXT, part_no INTEGER, part_total INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_events_class ON events(batch_id, row_class);
+CREATE INDEX IF NOT EXISTS idx_events_txn ON events(batch_id, txn_id);
+CREATE TABLE IF NOT EXISTS txn_results (
+    batch_id TEXT NOT NULL, txn_id TEXT NOT NULL,
+    status TEXT NOT NULL, part_total INTEGER NOT NULL, part_count INTEGER NOT NULL,
+    missing_json TEXT NOT NULL DEFAULT '[]',
+    conflict_parts_json TEXT NOT NULL DEFAULT '[]',
+    late_parts_json TEXT NOT NULL DEFAULT '[]',
+    row_refs_json TEXT NOT NULL DEFAULT '[]',
+    tables_json TEXT NOT NULL DEFAULT '[]',
+    event_count INTEGER NOT NULL DEFAULT 0,
+    max_event_time_utc TEXT, gate_utc TEXT,
+    published_amount TEXT NOT NULL DEFAULT '0.00',
+    affected_amount TEXT NOT NULL DEFAULT '0.00',
+    reason_code TEXT NOT NULL, detail TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (batch_id, txn_id)
+);
+CREATE INDEX IF NOT EXISTS idx_txn_status ON txn_results(batch_id, status);
 CREATE TABLE IF NOT EXISTS snapshots (
     batch_id TEXT NOT NULL, table_name TEXT NOT NULL, pk TEXT NOT NULL,
     version INTEGER NOT NULL, op TEXT NOT NULL, amount TEXT, qty INTEGER,
@@ -85,7 +103,11 @@ class Store:
     @staticmethod
     def _ensure_columns(conn) -> None:
         """轻量迁移：老库缺列时补上，避免升级后 500。"""
-        wanted = {"inputs": {"declared": "TEXT"}}
+        wanted = {
+            "inputs": {"declared": "TEXT"},
+            "events": {"txn_id": "TEXT", "part_no": "INTEGER",
+                       "part_total": "INTEGER"},
+        }
         for table, columns in wanted.items():
             existing = {row["name"] for row in conn.execute(
                 f"PRAGMA table_info({table})").fetchall()}
@@ -139,9 +161,10 @@ class Store:
     # ---------- 一次运行落库（单事务替换） ----------
     def save_run(self, *, batch: dict, inputs: list[dict], events: list[dict],
                  snapshots: list[dict], watermarks: list[dict], stages: list[dict],
-                 totals: dict, manifest: dict) -> None:
+                 totals: dict, manifest: dict, txn_results: list[dict] | None = None) -> None:
         with self.connect() as conn:
-            for table in ("inputs", "events", "snapshots", "watermarks", "stages", "totals"):
+            for table in ("inputs", "events", "snapshots", "watermarks", "stages",
+                          "totals", "txn_results"):
                 conn.execute(f"DELETE FROM {table} WHERE batch_id=?", (batch["batch_id"],))
             for i, item in enumerate(inputs, 1):
                 conn.execute(
@@ -156,8 +179,9 @@ class Store:
                 conn.execute(
                     """INSERT INTO events (batch_id,row_ref,seq,table_name,pk,version,op,
                         event_time_utc,event_time_raw,schema_version,payload_json,amount,qty,
-                        row_class,reason_code,field,raw_value,detail,late,flags_json,raw_text)
-                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        row_class,reason_code,field,raw_value,detail,late,flags_json,raw_text,
+                        txn_id,part_no,part_total)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                     (batch["batch_id"], row["row_ref"], row["seq"], row["table"], row["pk"],
                      row.get("version"), row.get("op"), row.get("event_time"),
                      row.get("event_time_raw"), row.get("schema"),
@@ -168,7 +192,8 @@ class Store:
                      row.get("field"), row.get("raw_value"), row.get("detail"),
                      1 if row.get("late") else 0,
                      json.dumps(row.get("flags", []), ensure_ascii=False),
-                     row.get("raw_text", "")))
+                     row.get("raw_text", ""),
+                     row.get("txn_id"), row.get("part_no"), row.get("part_total")))
             for s in snapshots:
                 conn.execute(
                     """INSERT INTO snapshots (batch_id,table_name,pk,version,op,amount,qty,
@@ -185,6 +210,19 @@ class Store:
                         watermark_utc,late,behind_seconds) VALUES (?,?,?,?,?,?,?)""",
                     (batch["batch_id"], w["seq"], w["row_ref"], w["event_time"],
                      w["watermark"], 1 if w.get("late") else 0, w.get("behind_seconds", 0)))
+            for txn in (txn_results or []):
+                conn.execute(
+                    """INSERT INTO txn_results (batch_id,txn_id,status,part_total,part_count,
+                        missing_json,conflict_parts_json,late_parts_json,row_refs_json,
+                        tables_json,event_count,max_event_time_utc,gate_utc,
+                        published_amount,affected_amount,reason_code,detail)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (batch["batch_id"], txn["txn_id"], txn["status"], txn["part_total"],
+                     txn["part_count"], txn["missing_json"], txn["conflict_parts_json"],
+                     txn["late_parts_json"], txn["row_refs_json"], txn["tables_json"],
+                     txn["event_count"], txn.get("max_event_time_utc"),
+                     txn.get("gate_utc"), txn["published_amount"],
+                     txn["affected_amount"], txn["reason_code"], txn.get("detail", "")))
             for s in stages:
                 conn.execute(
                     """INSERT INTO stages (batch_id,stage,in_count,out_count,
@@ -297,6 +335,49 @@ class Store:
         return self._all(
             "SELECT * FROM watermarks WHERE batch_id=? ORDER BY seq", (batch_id,))
 
+    def load_txn_results(self, batch_id: str, status: str | None = None) -> list[dict]:
+        if status:
+            rows = self._all(
+                "SELECT * FROM txn_results WHERE batch_id=? AND status=? "
+                "ORDER BY txn_id", (batch_id, status))
+        else:
+            rows = self._all(
+                "SELECT * FROM txn_results WHERE batch_id=? ORDER BY "
+                "CASE status WHEN 'conflict' THEN 0 WHEN 'incomplete' THEN 1 ELSE 2 END, "
+                "txn_id", (batch_id,))
+        for row in rows:
+            for key in ("missing_json", "conflict_parts_json", "late_parts_json",
+                        "row_refs_json", "tables_json"):
+                row[key.replace("_json", "")] = json.loads(row.pop(key) or "[]")
+            row["published_amount"] = Decimal(row["published_amount"])
+            row["affected_amount"] = Decimal(row["affected_amount"])
+        return rows
+
+    def replace_txn_results(self, batch_id: str, rows: list[dict],
+                            totals: dict | None = None) -> None:
+        """按同一输入重算事务装配：先删后插，不动事件行；失败整体回滚。"""
+        with self.connect() as conn:
+            conn.execute("DELETE FROM txn_results WHERE batch_id=?", (batch_id,))
+            for txn in rows:
+                conn.execute(
+                    """INSERT INTO txn_results (batch_id,txn_id,status,part_total,part_count,
+                        missing_json,conflict_parts_json,late_parts_json,row_refs_json,
+                        tables_json,event_count,max_event_time_utc,gate_utc,
+                        published_amount,affected_amount,reason_code,detail)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (batch_id, txn["txn_id"], txn["status"], txn["part_total"],
+                     txn["part_count"], txn["missing_json"], txn["conflict_parts_json"],
+                     txn["late_parts_json"], txn["row_refs_json"], txn["tables_json"],
+                     txn["event_count"], txn.get("max_event_time_utc"),
+                     txn.get("gate_utc"), str(txn["published_amount"]),
+                     str(txn["affected_amount"]), txn["reason_code"],
+                     txn.get("detail", "")))
+            for key, value in (totals or {}).items():
+                conn.execute("DELETE FROM totals WHERE batch_id=? AND key=?",
+                             (batch_id, key))
+                conn.execute("INSERT INTO totals (batch_id,key,value) VALUES (?,?,?)",
+                             (batch_id, key, str(value)))
+
     def load_stages(self, batch_id: str) -> list[dict]:
         from . import config
         rows = self._all("SELECT * FROM stages WHERE batch_id=? ORDER BY rowid", (batch_id,))
@@ -314,7 +395,8 @@ class Store:
 
     def count_rows(self, batch_id: str) -> dict:
         out = {}
-        for table in ("inputs", "events", "snapshots", "watermarks", "stages"):
+        for table in ("inputs", "events", "snapshots", "watermarks", "stages",
+                      "txn_results"):
             out[table] = self._all(
                 f"SELECT COUNT(*) AS n FROM {table} WHERE batch_id=?", (batch_id,))[0]["n"]
         return out

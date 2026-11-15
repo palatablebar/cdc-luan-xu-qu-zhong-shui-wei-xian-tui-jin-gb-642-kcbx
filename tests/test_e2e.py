@@ -25,7 +25,7 @@ def test_full_pipeline_matches_expected(run):
     assert run["all_balanced"] is True
     assert [row["name"] for row in run["reconciliation"]] == ["行账", "键账", "快照账", "金额账"]
     assert [stage["stage"] for stage in run["stages"]] == [
-        "ingest", "contract", "dedup", "watermark", "snapshot", "export"]
+        "ingest", "contract", "dedup", "watermark", "txn", "snapshot", "export"]
 
 
 def test_all_pages_return_200(client):
@@ -34,6 +34,7 @@ def test_all_pages_return_200(client):
         "/events": "事件流",
         "/schema": "契约",
         "/conflicts": "冲突与隔离",
+        "/txn": "事务装配",
         "/snapshot": "快照",
         "/batches": "批次",
     }
@@ -95,10 +96,13 @@ def test_empty_state_pages_render(settings):
     """空态：库里还没有批次时 6 个页面都要 200，不能 500。"""
     app = create_app(settings, seed=False)
     with TestClient(app) as client:
-        for path in ("/", "/events", "/schema", "/conflicts", "/snapshot", "/batches"):
+        for path in ("/", "/events", "/schema", "/conflicts", "/txn", "/snapshot",
+                     "/batches"):
             response = client.get(path)
             assert response.status_code == 200, path
         assert client.get("/api/health").json()["batch_id"] is None
         snapshot = client.get("/snapshot")
         assert "还没有快照。" in snapshot.text
         assert "0.00" in snapshot.text
+        txn = client.get("/txn")
+        assert "还没有事务数据" in txn.text

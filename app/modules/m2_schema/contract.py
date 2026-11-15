@@ -22,7 +22,10 @@ SCHEMAS = {
     },
 }
 
-ENVELOPE = ("table", "pk", "version", "op", "event_time", "schema")
+ENVELOPE = ("table", "pk", "version", "op", "event_time", "schema",
+            "txn_id", "part_no", "part_total")
+# 事务信封字段：txn_id 非空即按事务装配（M8）；分片号从 1 起，part_total 给齐才能判完整
+TXN_FIELDS = ("txn_id", "part_no", "part_total")
 
 
 def table_known(name: str) -> bool:

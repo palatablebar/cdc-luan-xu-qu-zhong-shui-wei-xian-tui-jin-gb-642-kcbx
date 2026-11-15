@@ -24,6 +24,7 @@ NAV = (
     ("/events", "事件流", "events"),
     ("/schema", "契约", "schema"),
     ("/conflicts", "冲突隔离", "conflicts"),
+    ("/txn", "事务", "txn"),
     ("/snapshot", "快照", "snapshot"),
     ("/batches", "批次", "batches"),
 )
@@ -36,6 +37,7 @@ ROW_CLASS_LABELS = {
 }
 SNAPSHOT_LABELS = {"active": "活跃", "tombstone": "墓碑", "pending": "待定"}
 STATUS_LABELS = {"done": "完成", "failed": "失败", "running": "运行中", "stale": "已拒绝"}
+TXN_LABELS = {"complete": "完整", "incomplete": "未完整", "conflict": "冲突"}
 
 
 @dataclass
@@ -95,7 +97,8 @@ def setup(app) -> None:
         fields=config.FIELDS,
         aliases=config.ALIASES,
         source_labels=config.SOURCE_LABELS,
-        source_keys=("all", "main", "v1_csv", "late"),
+        source_keys=("all", "main", "v1_csv", "late", "txn"),
+        txn_labels=TXN_LABELS,
         money_unit=config.MONEY_UNIT,
         window_note=config.WINDOW_NOTE,
         late_window=config.LATE_WINDOW_MINUTES,
@@ -113,6 +116,9 @@ DEFAULT_TOTALS = {
     "tombstone_keys": 0, "pending_only_keys": 0, "pending_events": 0,
     "drift_keys": 0, "amount_snapshot": "0.00", "amount_pending": "0.00",
     "amount_drift": "0.00", "amount_applied": "0.00",
+    "txn_total": 0, "txn_complete": 0, "txn_incomplete": 0, "txn_conflict": 0,
+    "txn_published_events": 0, "txn_held_events": 0,
+    "txn_published_amount": "0.00", "txn_affected_amount": "0.00",
     "reconcile_ok": "0",
 }
 

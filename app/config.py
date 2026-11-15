@@ -20,23 +20,35 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CHINA_TZ = dt.timezone(dt.timedelta(hours=8), "Asia/Shanghai")
 UTC = dt.timezone.utc
 
-RULE_VERSION = "cdcwater/1.0.0"
+RULE_VERSION = "cdcwater/1.1.0"
 DECIMAL_QUANT = Decimal("0.01")
 MONEY_UNIT = "元"
 
 # 迟到窗口：水位线 = 已应用事件最大 event_time − 该窗口
 LATE_WINDOW_MINUTES = 10
 
-STAGES = ("ingest", "contract", "dedup", "watermark", "snapshot", "export")
+# 事务装配（M8）：只有来源依据完整的业务事务才进对外结果
+# 事务状态：complete=分片齐全可发布 / incomplete=缺片挂起 / conflict=同片冲突整组不发布
+TXN_STATUS = ("complete", "incomplete", "conflict")
+TXN_STATUS_LABELS = {
+    "complete": "完整",
+    "incomplete": "未完整",
+    "conflict": "冲突",
+}
+# 单事务挂起宽限：超过组内最大事件时间 − 迟到窗口 仍未补齐，只老化该事务，不拖全局水位
+TXN_STAGE = "txn"
+
+STAGES = ("ingest", "contract", "dedup", "watermark", "txn", "snapshot", "export")
 STAGE_LABELS = {
     "ingest": "采信",
     "contract": "契约",
     "dedup": "去重冲突",
     "watermark": "水位迟到",
+    "txn": "事务装配",
     "snapshot": "快照",
     "export": "导出",
 }
-STAGE_FLOW = "采信 → 契约 → 去重冲突 → 水位迟到 → 快照 → 导出"
+STAGE_FLOW = "采信 → 契约 → 去重冲突 → 水位迟到 → 事务装配 → 快照 → 导出"
 
 # 编码回退链：先按声明尝试，再按严格顺序逐个试；gb18030 是 gbk/gb2312 的超集
 ENCODING_CHAIN = ("utf-8", "gb18030")
@@ -94,10 +106,12 @@ ALIAS_ORIGIN = {
 }
 
 # 样例来源：文件名固定，顺序即采信顺序（同一顺序保证结果可复算）
+# 注意：事务分片文件是独立来源，不进默认 all，避免改变既有事件口径的期望值
 SOURCES = {
     "main": ("events_main.jsonl",),
     "v1_csv": ("events_v1_gb.csv",),
     "late": ("events_late.jsonl",),
+    "txn": ("events_txn.jsonl",),
 }
 SOURCE_ORDER = ("events_main.jsonl", "events_v1_gb.csv", "events_late.jsonl")
 SOURCE_LABELS = {
@@ -105,6 +119,7 @@ SOURCE_LABELS = {
     "main": "主文件 events_main.jsonl",
     "v1_csv": "旧列名 events_v1_gb.csv",
     "late": "迟到补丁 events_late.jsonl",
+    "txn": "事务分片 events_txn.jsonl",
 }
 
 CSV_COLUMNS = ("table", "pk", "version", "op", "event_time", "schema",

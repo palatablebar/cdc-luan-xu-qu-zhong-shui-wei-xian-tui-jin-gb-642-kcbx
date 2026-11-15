@@ -30,6 +30,10 @@ class Applied:
     row_ref: str
     late: bool
     seq: int
+    # M8 事务信封（空串表示事务外的普通事件）
+    txn_id: str = ""
+    part_no: int | None = None
+    part_total: int | None = None
 
     @property
     def key(self) -> tuple[str, str]:
@@ -44,7 +48,10 @@ class Applied:
         return cls(table=norm.table, pk=norm.pk, version=int(norm.version or 0),
                    op=norm.op or "upsert", payload=dict(norm.payload),
                    amount=norm.amount, qty=norm.qty, event_time=norm.event_time,
-                   row_ref=norm.row_ref, late=norm.late, seq=norm.seq)
+                   row_ref=norm.row_ref, late=norm.late, seq=norm.seq,
+                   txn_id=getattr(norm, "txn_id", "") or "",
+                   part_no=getattr(norm, "part_no", None),
+                   part_total=getattr(norm, "part_total", None))
 
     @classmethod
     def from_row(cls, row: dict) -> "Applied":
@@ -52,7 +59,9 @@ class Applied:
                    op=row["op"], payload=dict(row.get("payload") or {}),
                    amount=row.get("amount"), qty=row.get("qty"),
                    event_time=parse_iso(row["event_time_utc"]),
-                   row_ref=row["row_ref"], late=bool(row.get("late")), seq=row["seq"])
+                   row_ref=row["row_ref"], late=bool(row.get("late")), seq=row["seq"],
+                   txn_id=row.get("txn_id") or "", part_no=row.get("part_no"),
+                   part_total=row.get("part_total"))
 
     def as_dict(self) -> dict:
         return {
@@ -61,6 +70,8 @@ class Applied:
             "amount": None if self.amount is None else str(self.amount),
             "qty": self.qty, "event_time": iso_utc(self.event_time),
             "row_ref": self.row_ref, "late": self.late,
+            "txn_id": self.txn_id or None, "part_no": self.part_no,
+            "part_total": self.part_total,
         }
 
 

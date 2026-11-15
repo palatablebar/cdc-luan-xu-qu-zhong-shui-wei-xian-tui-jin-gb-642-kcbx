@@ -10,6 +10,11 @@
     "inventory",
     "refunds"
   ],
+  "envelope": {
+    "txn_id": {"type": "string", "required": false, "note": "非空即进入事务装配 M8"},
+    "part_no": {"type": "int", "required": false, "note": "分片号，从 1 起，需 <= part_total"},
+    "part_total": {"type": "int", "required": false, "note": "事务分片总数"}
+  },
   "fields": {
     "ref": {
       "type": "string",

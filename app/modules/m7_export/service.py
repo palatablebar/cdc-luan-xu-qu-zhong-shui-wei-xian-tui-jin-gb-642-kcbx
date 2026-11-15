@@ -1,8 +1,9 @@
-"""导出编排：把一次运行的证据行、隔离、冲突、快照与清单拼成可下载文件。"""
+"""导出编排：把一次运行的证据行、隔离、冲突、快照、事务与清单拼成可下载文件。"""
 from __future__ import annotations
 
 from ... import errors, reasons
 from ..m5_snapshot import service as m5_service
+from ..m8_txn import service as m8_service
 from . import csv_out, json_out, manifest_out
 
 DATASETS = {
@@ -14,9 +15,13 @@ DATASETS = {
                   "columns": csv_out.CONFLICT_COLUMNS},
     "snapshot": {"label": "快照", "filename": "snapshot.csv",
                  "columns": csv_out.SNAPSHOT_COLUMNS},
+    "txn": {"label": "事务结果", "filename": "txn.csv",
+            "columns": csv_out.TXN_COLUMNS},
     "manifest": {"label": "运行清单", "filename": "manifest.json", "columns": ()},
     "snapshot_json": {"label": "快照 JSON", "filename": "snapshot.json",
                       "columns": ()},
+    "txn_json": {"label": "事务 JSON（对外结果）", "filename": "txn.json",
+                 "columns": ()},
 }
 
 
@@ -37,6 +42,8 @@ def rows_for(store, batch_id: str, kind: str) -> list[list]:
         return csv_out.conflict_rows([r for r in rows if r["row_class"] == "conflict"])
     if kind == "snapshot":
         return csv_out.snapshot_rows(store.load_snapshot(batch_id))
+    if kind == "txn":
+        return csv_out.txn_rows(m8_service.page_rows(store, batch_id))
     raise errors.BadRequest(f"未知导出集 {kind!r}", code="E_BAD_DATASET")
 
 
@@ -66,6 +73,17 @@ def render_snapshot_json(store, batch_id: str) -> tuple[bytes, str]:
     return json_out.dumps(payload).encode("utf-8"), f"{batch_id}-snapshot.json"
 
 
+def render_txn_json(store, batch_id: str, settings) -> tuple[bytes, str]:
+    batch = store.get_batch(batch_id) or {}
+    summary = m8_service.summarize(store, batch_id)
+    results = m8_service.page_rows(store, batch_id)
+    reconcile = [_plain(r) for r in
+                 m8_service.reconcile(store, batch_id, settings.late_window)]
+    payload = json_out.txn_document(batch=batch, summary=summary, results=results,
+                                    reconcile=reconcile)
+    return json_out.dumps(payload).encode("utf-8"), f"{batch_id}-txn.json"
+
+
 def catalog(store, batch_id: str | None = None) -> list[dict]:
     batch = _batch(store, batch_id)
     rows = store.load_events(batch["batch_id"])
@@ -74,8 +92,10 @@ def catalog(store, batch_id: str | None = None) -> list[dict]:
         "quarantine": sum(1 for r in rows if r["row_class"] == "quarantine"),
         "conflicts": sum(1 for r in rows if r["row_class"] == "conflict"),
         "snapshot": len(store.load_snapshot(batch["batch_id"])),
+        "txn": len(store.load_txn_results(batch["batch_id"])),
         "manifest": 1,
         "snapshot_json": 1,
+        "txn_json": 1,
     }
     out = []
     for key, meta in DATASETS.items():

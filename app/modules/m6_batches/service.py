@@ -16,6 +16,8 @@ from ..m3_dedup import service as m3_service
 from ..m4_watermark import watermark as wm_mod
 from ..m5_snapshot import materialize, service as m5_service
 from ..m5_snapshot import apply as apply_mod
+from ..m8_txn import assembly as txn_asm
+from ..m8_txn import service as txn_service
 from . import history, resume, state
 
 
@@ -23,8 +25,11 @@ COUNT_KEYS = ("files", "raw_lines", "blank_lines", "header_repeat", "applied",
               "duplicates", "conflicts", "quarantine", "late_events",
               "on_time_events", "max_behind_minutes", "keys_total",
               "snapshot_keys", "active_keys", "tombstone_keys",
-              "pending_only_keys", "pending_events", "drift_keys")
-AMOUNT_KEYS = ("amount_snapshot", "amount_pending", "amount_drift", "amount_applied")
+              "pending_only_keys", "pending_events", "drift_keys",
+              "txn_total", "txn_complete", "txn_incomplete", "txn_conflict",
+              "txn_published_events", "txn_held_events")
+AMOUNT_KEYS = ("amount_snapshot", "amount_pending", "amount_drift", "amount_applied",
+               "txn_published_amount", "txn_affected_amount")
 TIME_KEYS = ("watermark_utc", "max_event_time", "snapshot_as_of")
 
 
@@ -114,6 +119,25 @@ def run(*, settings, store, source: str = "all", params: dict | None = None,
     max_event = _iso(marks.max_event_time)
     resume.ensure_not_stale(store, max_event)
 
+    # ---- M8 事务装配（在快照之前：对外结果只采信来源依据完整的业务事务） ----
+    # 接管全部非隔离事件：M3 的冲突/重复分类在事务口径里分别映射为
+    # 「整事务不发布」与「重投不重复计数」，而不是让这些分片静默消失。
+    step = time.perf_counter()
+    txn_norms = [n for n in classified.all_rows
+                 if n.txn_id and n.row_class != "quarantine"]
+    txn_input = [apply_mod.Applied.from_norm(n) for n in txn_norms]
+    txn_result = txn_asm.assemble(txn_input, settings.late_window)
+    txn_rows = [r.as_store_row(batch_id) for r in txn_result.results]
+    txn_total = txn_service.txn_totals(txn_result)
+    stages.append(_stage(
+        "txn",
+        in_count=len(txn_input),
+        out_count=len(txn_result.complete),
+        quarantine=len(txn_result.incomplete) + len(txn_result.conflicts),
+        elapsed_ms=_ms(step),
+        note=f"完整 {len(txn_result.complete)} / 未完整 "
+             f"{len(txn_result.incomplete)} / 冲突 {len(txn_result.conflicts)}"))
+
     # ---- M5 快照 ----
     step = time.perf_counter()
     snapshot = materialize.materialize(applied, marks.final)
@@ -161,6 +185,7 @@ def run(*, settings, store, source: str = "all", params: dict | None = None,
         "amount_applied": snapshot.amounts["applied"],
         "watermark_utc": _iso(marks.final),
         "max_event_time": max_event,
+        **txn_total,
         "reconcile_ok": 1 if all(r["ok"] for r in reconcile) else 0,
         "reconcile_json": json.dumps(_jsonable(reconcile), ensure_ascii=False),
     }
@@ -198,7 +223,8 @@ def run(*, settings, store, source: str = "all", params: dict | None = None,
         events=[n.to_row() for n in classified.all_rows],
         snapshots=snapshot_rows,
         watermarks=wm_mod.series_rows(marks, iso),
-        stages=stages, totals=totals, manifest=doc)
+        stages=stages, totals=totals, manifest=doc,
+        txn_results=txn_rows)
 
     return {
         "status": "done",
